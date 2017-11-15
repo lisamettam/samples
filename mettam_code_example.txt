@@ -1,0 +1,1255 @@
+<?php
+// $Id$
+
+/**
+ * This module provides a form for submitting PTO and various report
+ * reporting pages for both users and managers.
+ * @file
+ */
+ 
+/**
+ * Implementation of hook_help()
+ */
+ function time_off_help($path, $arg) {	
+ 	 switch ($path) {
+ 	 	case 'admin/help#time_off':
+ 	 		return t('Individual users can access the ENTER PTO page which displays '.
+ 	 			'a status note and a form by which the user can enter PTO for the '.
+ 	 			'current payperiod. Once saved, the PTO entry can be edited, deleted '.
+ 	 			'or submitted to their manager for approval through the '.
+ 	 			'VIEW MY PTO RECORDS page.');
+ 	 	case 'admin/modules#description':
+ 	 		return t('This module provides a form for submitting PTO and various '.
+ 	 			'reporting pages for both subordinates and managers.');
+ 	 }
+}
+
+/**
+ * Implementation of hook_views_api().
+ */
+function time_off_views_api() {
+  return array(
+    'api' => 2,
+    'path' => drupal_get_path('module', 'time_off'),
+    //'path' => drupal_get_path('module', 'time_off') . '/includes',
+  );
+}
+ 
+/**
+ * Implementation of hook_menu()
+ */
+ function time_off_menu() {
+
+ 	 $items['time_off'] = array(
+ 	 	 'title' => 'Enter PTO',
+ 	 	 'description' => 'Enter your paid time off request',
+ 	 	 'access callback' => 'user_access',
+ 	 	 'access arguments' => array('access PTO pages'),
+ 	 	 'page callback' => 'display_form',
+ 	 	 //'page arguments' => array('PTO_form_settings'),
+ 	 	 //'type' => MENU_CALLBACK,
+ 	 );
+ 	 
+ 	$items['view_user_pto'] = array(
+ 	 	'title' => 'View My PTO Records',
+ 	 	'description' => 'View all your current and previous PTO entries.',
+ 	 	'access callback' => 'user_access',
+ 	 	'access arguments' => array('access PTO pages'),
+ 	 	'page callback' => 'user_pto_display',
+ 	 	//'type' => MENU_CALLBACK,
+ 	);
+ 	
+ 	$items['view_subordinate_pto'] = array(
+ 		'title' => 'Manage Subordinate PTO',
+ 		'description' => 'View submissions waiting approval and previously approved PTO.',
+ 		'access callback' => 'user_access',
+ 		'access arguments' => array('access Manager PTO page'),
+ 		'page callback' => 'manager_pto_display',
+ 		'type' => MENU_CALLBACK,
+ 	);
+ 	
+ 	 $items['view_pto_admin'] = array(
+ 		'title' => "PTO Administrator's Page",
+ 		'description' => 'View all PTO records.',
+ 		'access callback' => 'user_access',
+ 		'access arguments' => array('access PTO administration pages'),
+ 		'page callback' => 'admin_pto_display',
+ 		'type' => MENU_CALLBACK,
+ 	);
+ 	 
+ 	 $items['admin_time_off'] = array(
+ 	 	 'title' => 'Enter PTO for a User',
+ 	 	 'description' => "Enter an employee's paid time off request",
+ 	 	 'access callback' => 'user_access',
+ 	 	 'access arguments' => array('access PTO administration pages'),
+ 	 	 'page callback' => 'admin_display_form',
+ 	 	 //'page arguments' => array('PTO_form_settings'),
+ 	 	 //'type' => MENU_CALLBACK,
+ 	 );
+ 	 
+ 	 $items['admin_approve_pto'] = array(
+ 	 	 'title' => 'Approve PTO for a Manager',
+ 	 	 'description' => "Approve PTO on behalf of a Manager.",
+ 	 	 'access callback' => 'user_access',
+ 	 	 'access arguments' => array('access PTO administration pages'),
+ 	 	 'page callback' => 'admin_pto_approve',
+ 	 	 //'page arguments' => array('PTO_form_settings'),
+ 	 	 //'type' => MENU_CALLBACK,
+ 	 );
+ 	 
+ 	 return $items;
+ }
+ 
+/**
+ * Implement hook_perm()
+ */ 
+ function time_off_perm() {
+ 	 return array(
+ 	 	 'access PTO pages', 
+ 	 	 'access Manager PTO page', 
+ 	 	 'access PTO administration pages'
+ 	 );
+ }
+
+ 
+/**
+* Menu callback: function called when user goes to /time_off
+ */
+  
+ function display_form() {
+ 	 
+ 	 $current_payperiod = _time_off_get_payperiod();
+ 	 //$other_payperiod = _time_off_calc_payperiod();
+ 	 //$entry2edit = '';
+ 	 //if (arg(1)) {$entry2edit = arg(1);}
+ 	 
+ 	 $output = t('Please use this form to enter your PTO for the current pay period.');
+ 	 $output .= '<br />Current Pay Period Ends: ';
+ 	 $output .= date_format($current_payperiod, 'l F j, Y') . '<br />';
+ 	 //$output .= date_format($other_payperiod, 'l F j, Y') . '<br />';
+ 	 //$output .= arg(2) . '<br />HELLO! ' . arg(1);
+ 	 // Return the HTML generated from the $form data structure.
+	 $output .= drupal_get_form('time_off_form', $entry2edit);
+
+ 	 return $output;
+ }
+ 
+ /**
+ * Implement hook_theme().
+ */
+ function time_off_theme($form) {
+ 	 return array(
+ 	 	 'time_off_form' => array(
+ 	 	 	 'template' => 'time_off_form',
+ 	 	 	 'arguments' => array('form' => NULL),
+ 	 	 ),
+ 	 	 'admin_time_off_form' => array(
+ 	 	 	 'template' => 'time_off_form',
+ 	 	 	 'arguments' => array('form' => NULL),
+ 	 	 ),
+ 	 );
+ }
+ 
+/**
+ * Implementation of hook_form().
+ * This function displays the form to allow employees to enter PTO.
+ * @return
+ *		Form array
+ */
+ function time_off_form() {  /*main PTO entry form*/
+ 	 
+ 	 global $user;
+ 	 $entry2edit = '';
+ 	 if (arg(1)) {
+ 	 	 $entry2edit = db_fetch_array(db_query(
+ 	 	 	 'SELECT * FROM {data_table_time_off_table} '
+ 	 	 	 .'WHERE entry_ID = %d',
+ 	 	 	 arg(1)
+ 		 ));
+ 	 }
+ 	 
+ 	 $form['#id'] = 'enter_pto';
+ 	 
+ 	// Add hidden values	 
+ 	 // User info via uid
+
+ 	 $form['uid'] = array(
+ 	 	 '#type' => 'value',
+ 	 	 '#value' => $user->uid,
+ 	 );
+ 	 
+ 	 $form['save_date'] = array(
+ 	 	 '#type' => 'value',
+ 	 	 '#value' => date('Y-m-d - H:i'),
+ 	 );
+ 	 // Indicate if this is a new or edited entry
+
+ 	 $form['edit'] = array(
+ 	 	 '#type' => 'value',
+ 	 	 '#value' => (arg(1)),
+ 	 );
+ 	 
+ 	 // Submission status of entry
+ 	 $form['status'] = array(
+ 	 	 '#type' => 'value',
+ 	 	 '#value' => t('Saved'),
+ 	 );
+
+ 	 // PTO taken - radio button input
+ 	 $form['pto_taken'] = array(
+ 	 	 '#type' => 'radios',
+ 	 	 '#title' => t('PTO taken'),
+ 	 	 '#required' => TRUE,
+ 	 	 '#options' => array('Yes' => t('Yes'), 'No' => t('No')),
+ 	 	 '#description' => t('Did you take any PTO this pay period?'),
+ 	 	 '#default_value' => $entry2edit['pto_taken'],
+ 	 	 
+ 	 );
+ 	 
+ 	 // Fieldset for PTO entry if 'pto_taken' is true.
+ 	 $form['new_pto'] = array(	 
+ 	 	 '#title' => t('Enter PTO information'),
+ 	 	 '#type' => 'fieldset',
+ 	 	 '#attributes' => array('id' => 'new_pto'),
+ 	 	 '#collapsible' => TRUE,
+ 	 	 '#collapsed' => TRUE,
+ 	 );
+ 	 
+ 	 // Form elements for recording PTO taken
+ 	 $form['new_pto']['pto_date'] = array(
+ 	 	 '#type' => 'date',
+ 	 	 '#title' => t('Date'),
+ 	 	 '#default_value' => $entry2edit['pto_date'],
+ 	 	 '#description' => t('Enter the date you took PTO'),
+ 	 );
+ 	 if (module_exists('date_popup')) {
+ 	 	 $today_date = date_create(date('Y-m-d'));
+ 	 	 $today = date('d');
+ 	 	 
+ 	 	 if ($today = 1 || $today = 16) {
+ 	 	 	 date_modify($today_date, '-1 day');
+ 	 	 }
+ 	 	 
+ 	 	 $payperiod = _time_off_calc_payperiod($today_date);
+ 	 	 
+ 	 	 $form['new_pto']['pto_date']['#type'] = 'date_popup';
+ 	 	 // Get the system date format.
+ 	 	 $date_format = variable_get('date_format_short', 'm/d/Y');
+ 	 	 // Remove anything not date-related. This prevents date_popup from showing a time picker.
+ 	 	 $date_format = date_limit_format($date_format, array('year', 'month', 'day'));
+ 	 	 $form['new_pto']['pto_date']['#date_format'] = $date_format;
+ 	 	 $form['new_pto']['pto_date']['#date_date_min'] = date_format($payperiod['start'],'Y-m-d');
+ 	 	 $form['new_pto']['pto_date']['#date_date_max'] = date_format($payperiod['end'],'Y-m-d');
+ 	 	 $form['new_pto']['pto_date']['#date_timezone'] = 'America/New York';
+ 	 	 
+ 	 }
+ 	 
+ 	 $form['new_pto']['pto_hours'] = array(
+ 	 	 '#type' => 'radios',
+ 	 	 '#title' => t('Hours'),
+ 	 	 '#options' => array('4' => t('4 hours'), '8' => t('8 hours')),
+ 	 	 '#description' => t('Select the number of hours of PTO taken.'),
+ 	 	 '#default_value' => $entry2edit['pto_hours'],
+ 	 	 '#prefix' => '<div class="pto_form_item">',
+ 	 	 '#suffix' => '</div>',
+ 	 );
+ 	 
+ 	 //$form['new_pto']['pto_type'] = array(
+ 	 //	 '#type' => 'radios',
+ 	 //	 '#title' => t('Type'),
+ 	 //	 '#options' => array( 'Sick' => t('Sick Time Off'), 
+ 	 //	 	 'Vacation' => t('Vacation Time Off')),
+ 	 //	 '#description' => t('Select which type of PTO you used.'),
+ 	 //	 '#default_value' => $entry2edit['pto_type'],
+ 	 //	 '#prefix' => '<div class="pto_form_item">',
+ 	 //	 '#suffix' => '</div>',
+ 	 //);
+ 	 
+ 	 // Submit
+ 	 $form['submit'] = array(
+ 	 	 '#type' => 'submit',
+ 	 	 '#value' => t('Save PTO Entry'),
+ 	 );
+ 	 
+ 	 $form['submit2'] = array(
+ 	 	 '#type' => 'submit',
+ 	 	 '#value' => t('Save and Add another PTO Entry'),
+ 	 );
+ 	 
+ 	 if (arg(1)) {
+ 	 	 $form['submit3'] = array(
+ 	 	 	 '#type' => 'submit',
+ 	 	 	 '#value' => t('Delete this PTO Entry'),
+ 	 	 	 //'#attributes' => array('onClick' => 'javascript:alert("")'),
+ 	 	 );
+ 	 }
+ 	 
+ 	 return $form;
+ }
+ 
+/**
+ * Validate the form.
+ */
+ 
+ function time_off_form_validate($form, &$form_state) {
+ 	 if ($form_state['values']['uid'] < '1') {
+ 	 		 form_set_error('', t('You must be logged in to use this form.'));
+ 	 }
+ 	 	 
+ 	 if ($form_state['values']['pto_taken'] == 'Yes' &&
+ 	 	 $form_state['values']['pto_date'] == '' ) {
+ 	 		form_set_error('pto_date', t('Select date of PTO.'));
+ 	 }
+ 	 if ($form_state['values']['pto_taken'] == 'Yes' && 
+ 	 	 $form_state['values']['pto_hours'] < 4 ) {
+ 	 	 	form_set_error('pto_hours',t('Select hours of PTO taken.'));
+ 	 }
+ 	 if ($form_state['values']['pto_taken'] == 'No' &&
+ 	 	 $form_state['values']['pto_hours'] > 0 && 
+ 	 	 $form_state['values']['pto_date'] != '') {
+ 	 		form_set_error('pto_taken', 
+ 	 			t('If you have hours to report, select "Yes" otherwise empty the date field.')
+ 	 		);
+ 	 } 	 
+ }
+ 
+/**
+ * Form submission handler.
+ */
+ function time_off_form_submit($form, &$form_state) {
+ 	 // If no pto taken, set pto date to last day of pay period.
+ 	 if ($form_state['clicked_button']['#value']== 'Delete this PTO Entry') {
+ 	 	 
+ 	 	 db_query(
+ 	 	 	 'DELETE FROM {data_table_time_off_table} WHERE entry_ID = %d',
+ 	 	 	 $form_state['values']['edit']
+ 	 	 );
+ 	 	 
+ 	 	 drupal_set_message('PTO entry deleted.');
+ 	 	 $form_state['redirect'] = 'view_user_pto';
+ 	 	 return;
+ 	 }
+ 	 
+ 	 $current_payperiod = date_format(_time_off_get_payperiod(),'Y-m-d');
+ 	 
+ 	 if ($form_state['values']['pto_taken'] == 'No') {
+ 	 	$form_state['values']['pto_date'] = $current_payperiod;
+ 	 	$form_state['values']['pto_hours'] = '';
+ 	 }
+ 	 // Update entry, if previously entered.
+ 	 if ($form_state['values']['edit'] != '') {
+ 	 	db_query(
+ 	 		'UPDATE {data_table_time_off_table} SET '
+ 	 			."uid = %d, save_date = '%s', pto_taken = '%s', pto_date = '%s', "
+ 	 			."pto_hours = %d, status = '%s' "
+ 	 			.'WHERE entry_ID = %d',
+ 	 			$form_state['values']['uid'],
+ 	 	 	 	$form_state['values']['save_date'],	 
+ 	 	 	 	$form_state['values']['pto_taken'],
+ 	 	 	 	$form_state['values']['pto_date'],
+ 	 	 	 	$form_state['values']['pto_hours'],
+ 	 	 	 	$form_state['values']['status'],
+ 	 	 	 	$form_state['values']['edit']
+ 	 	);
+ 	 }
+ 	 else {
+ 	 	 // Insert form entry
+ 	 	 db_query(
+ 	 	 	 'INSERT INTO {data_table_time_off_table} ( '
+ 	 	 	 	.'uid, save_date, pto_taken, pto_date, pto_hours, status ) '
+ 	 	 	 	."VALUES (%d, '%s', '%s', '%s', %d, '%s' )",
+ 	 	 	 	$form_state['values']['uid'],
+ 	 	 	 	$form_state['values']['save_date'],	 
+ 	 	 	 	$form_state['values']['pto_taken'],
+ 	 	 	 	$form_state['values']['pto_date'],
+ 	 	 	 	$form_state['values']['pto_hours'],
+ 	 	 	 	$form_state['values']['status']
+ 	 	 );
+ 	 }
+ 	 
+ 	 drupal_set_message('New PTO entry saved.');
+ 	 
+ 	 if ($form_state['clicked_button']['#value']== 'Save PTO Entry') {
+ 	 	 $form_state['redirect'] = 'view_user_pto';
+ 	 }
+ 	 
+ 	 if ($form_state['clicked_button']['#value']== 'Save and Add another PTO Entry') {
+ 	 	 $form_state['redirect'] = 'time_off';
+ 	 }
+ }
+ 	 
+ 
+ 
+ /****************************************************
+  *  User's PTO view and submission page functions.
+  ****************************************************/
+  
+ /**
+  * Implementation of hook_form()
+  * 
+  * Form used to change submition status of PTO records
+  * from 'status'='Saved' to 'status'='Submitted'
+  * which will trigger an email to the manager requesting approval.
+  */
+ function time_off_submission_form() {
+ 	 global $user;
+ 	 
+ 	 $form['#id'] = 'submit_pto'; 
+
+ 	 // User info via uid
+ 	 $form['uid'] = array(
+ 	 	 '#type' => 'value',
+ 	 	 '#value' => $user->uid,
+ 	 );
+ 	 	 
+ 	 $form['submit'] = array(
+ 	 	 '#type' => 'submit',
+ 	 	 '#value' => t('Submit PTO for Approval'),
+ 	 	 ); 
+	 
+ 	 return $form;
+ }
+/**
+ * Validate
+ */
+ function time_off_submission_form_validate($form, &$form_state) {
+ 	 if ($form_state['values']['uid'] < '1') {
+ 	 	  form_set_error('', t('You must be logged in to use this form.'));
+ 	 }
+ }
+ 	 
+/**
+ * Submission form submission handler.
+ * Changed 'Saved' status entries for this user to 'Submitted'.
+ */ 
+
+function time_off_submission_form_submit($form, &$form_state) {
+	$message = '';
+
+ 	db_query(
+ 		'UPDATE {data_table_time_off_table} '
+ 			."SET status = 'Submitted' "
+ 			."WHERE uid = %d and status = 'Saved'", 
+ 		$form_state['values']['uid']
+ 	);
+
+ 	$message .= t(' PTO submitted to manager.');
+ 	drupal_set_message($message);
+}
+
+/**
+ * Menu callback for individual's PTO records view
+ * Called when user goes to /view_user_pto
+ */
+ function user_pto_display() {
+ 	 global $user;
+ 	 $date_given = date_create(date('Y-m-d'));
+ 	 $payperiod = _time_off_calc_payperiod($date_given);
+ 	 $numPTOentriesSAVE = 0;
+ 	 $numPTOentriesSUB = 0;
+ 	 $numPTOentriesAPP = 0;
+ 	 
+ 	 $content = '';
+ 	 // Get number of unsubmitted PTO's for user
+	$PTO2sub = db_query(
+ 	 	 'SELECT * FROM {data_table_time_off_table} '
+ 	 	 . "WHERE uid = %d AND pto_date >= '" 
+ 	 	 . date_format($payperiod['start'], 'Y-m-d') . "'",
+ 	 	 $user->uid
+ 	 );
+ 	 while ($PTOentry = db_fetch_object($PTO2sub)) {
+ 	 	 if ($PTOentry->status == 'Saved') {
+ 	 	 	 $PTOentriesSAVE[$PTOentry->entry_ID] = array();
+ 	 	 }
+ 	 	 elseif ($PTOentry->status == 'Submitted') {
+ 	 	 	 $PTOentriesSUB[$PTOentry->entry_ID] = array();
+ 	 	 }
+ 	 	 elseif ($PTOentry->status == 'Approved') {
+ 	 	 	 $PTOentriesAPP[$PTOentry->entry_ID] = array();
+ 	 	 }
+ 		//$content .= $PTOentry->entry_ID . " " . $PTOentry->status . "<br />" ;
+ 	}
+ 	$numPTOentriesSAVE = count($PTOentriesSAVE);
+ 	$numPTOentriesSUB = count($PTOentriesSUB);
+ 	$numPTOentriesAPP = count($PTOentriesAPP);
+ 	
+ 	// test profile load
+ 	profile_load_profile($user);
+ 	$result = db_query("SELECT mail FROM {users}
+ 	 	 WHERE name = '%s'",
+ 	 	 $user->profile_manager);
+ 	$managersEmail = db_result($result);
+ 	
+ 	//$content .= 'Your manager is ' . $user->profile_manager;
+ 	//$content .= ' and the manager email is ' . $managersEmail . '<br />';
+ 	
+ 	 // If number of unsubmitted PTOs > 0 then
+ 	 if ($numPTOentriesSAVE > 0 ) {
+ 	 	 // Display PTO submission form if they have PTO to submit
+ 	 	 $content .= t('<p>If you have entered all your PTO for this pay ');
+ 	 	 $content .= t('period, please submit for approval.</p>');
+ 	 	 $content .= drupal_get_form('time_off_submission_form');
+ 	 	 $content .= '<br />';
+ 	 }
+ 	 elseif ($numPTOentriesSUB > 0 ) {
+ 	 	 $content .= t('<p>Submitted PTO is waiting for manager approval.</p>');
+ 	 }
+ 	 elseif ($numPTOentriesAPP > 0 ) {
+ 	 	 $content .= t('<p>All entered PTO for this pay period has been approved.</p>');
+ 	 }
+ 	 else {
+ 	 	 $content .= t('<h4>Please enter your PTO for this pay period.</h4>');
+ 	 }
+ 	 
+	 return $content;	
+	 // Else display up-to-date message
+ }
+ 
+ /****************************************************
+  *  Manager's PTO view and approval page functions.
+  ****************************************************/
+  
+ /**
+  * Implementation of hook_form()
+  * 
+  * Form used to change submition status of PTO records
+  * from 'status'='Submitted' to 'status'='Approved'
+  * which will trigger an email to the PTO administrator.
+  */
+ function time_off_approval_form(&$form_state, $pto_requests) {
+
+ 	 $form['#id'] = 'approve_pto'; 
+ 	 //$form['#action'] = url('view_pto');
+ 	 
+ 	 $form['sql'] = array(
+ 	 	 '#type' => 'value',
+ 	 	 '#value' => $pto_requests,
+ 	 );
+ 	 $form['name'] = array(
+ 	 	'#type' => 'value',
+ 	 	'#value' => 'Lisa',
+ 	 );
+ 	 
+ 	 $form['submit'] = array(
+ 	 	 '#type' => 'submit',
+ 	 	 '#value' => t('Approve'),
+ 	 	 ); 
+	 
+ 	 return $form;
+ }
+ 
+ function time_off_reject_form(&$form_state, $pto_entry) {
+
+ 	 $form['#id'] = 'reject_pto'; 
+ 	 $form['#action'] = url('view_subordinate_pto');
+ 	 
+ 	 $form['pto_id'] = array(
+ 	 	 '#type' => 'value',
+ 	 	 '#value' => $pto_entry->data_table_time_off_table_entry_ID,
+ 	 );
+ 	 
+ 	 $form['pto_date'] = array(
+ 	 	 '#type' => 'value',
+ 	 	 '#value' => $pto_entry->data_table_time_off_table_pto_date,
+ 	 );
+ 	 
+ 	 $form['submit'] = array(
+ 	 	 '#type' => 'submit',
+ 	 	 '#value' => t('Reject'),
+ 	 	 ); 
+	 
+ 	 return $form;
+ }
+ 
+/**
+ * PTO Approval form submission handler.
+ * Changed 'Submitted' status entries to 'Approved'.
+ */ 
+
+function time_off_approval_form_submit($form, &$form_state) {
+	$message = '';
+	// if the PTO is approved, set status to 'Approved'
+ 	db_query($form_state['values']['sql']
+ 	//	'UPDATE {data_table_time_off_table} '
+ 	//		."SET status = 'Approved' "
+ 	//		.'WHERE entry_ID = %d', 
+ 	//	$form_state['values']['pto_id']
+ 	);
+
+ 	//$message .= $form_state['values']['sql'] . '<br .>';
+ 	$message .= t('All submitted PTO approved.');
+ 	drupal_set_message($message);
+}
+
+/**
+ * PTO Reject form submission handler.
+ * Changed 'Submitted' status entries to 'Saved'.
+ */ 
+
+function time_off_reject_form_submit($form, &$form_state) {
+	$message = '';
+	// if the PTO is rejected, set status to 'Saved'
+ 	db_query(
+ 		'UPDATE {data_table_time_off_table} '
+ 			."SET status = 'Saved' "
+ 			.'WHERE entry_ID = %d', 
+ 		$form_state['values']['pto_id']
+ 	);
+
+ 	//$message .= $form_state['values']['pto_id'] . '<br .>';
+ 	$message .= t('PTO entry rejected.');
+ 	drupal_set_message($message);
+}
+  
+/**
+ * Menu callback for manager's PTO records view
+ * Called when user goes to /view_subordinate_pto
+*/
+ function manager_pto_display() {
+ 	 $content = '';
+ 	 
+ 	 // User uid to get login name for this manager
+ 	 global $user; 
+ 	 $manager = $user->name;
+ 	 // Get uid's (user id's) of this manager's subordinates ( fid=5 )
+ 	 $result = db_query("SELECT uid FROM {profile_values} WHERE fid = 5 AND value = '%s'",
+ 	 	 $manager);
+
+ 	 $sql = 'SELECT * FROM {data_table_time_off_table} WHERE (';
+ 	 $sql2 = 'UPDATE {data_table_time_off_table} '
+ 	 	. "SET status = 'Approved' "
+ 	 	. 'WHERE (';
+ 	 while ($subordinate = db_fetch_object($result)) {
+ 	 	 $subordinates[$subordinate->uid] = array();
+ 	 	 $sql .= 'uid = ' . $subordinate->uid . ' OR ';
+ 	 	 $sql2 .= 'uid = ' . $subordinate->uid . ' OR ';
+ 	 	 //$content .= $subordinate->uid . ', ';
+ 	 }
+ 	 $sql .= " entry_ID = 0 ) AND status = 'Submitted' ";
+ 	 $sql2 .= " entry_ID = 0 ) AND status = 'Submitted' ";
+ 	 //$content .= '<br />' . $sql;
+ 	 //$content .= '<br />' . $sql2;
+
+ 	 // Get list of submitted PTO by this manager's subordinates
+ 	 // Build query
+ 	 $numSubs = count($subordinates);
+ 	 //$content .= 'Number of Subordinates: ' . $numSubs . '<br />';
+ 	 	
+ 	 $result2 = db_query($sql);
+ 	 while ($pto_request = db_fetch_object($result2)) {
+ 	 	$pto_requests[$pto_request->entry_ID] = array();
+ 	 	//$content .= 'Entry: ' . $pto_request->entry_ID . '<br />';
+ 	 }
+ 	 $numPTOsubmissions = count($pto_requests);
+ 	 //$content .= 'Number of submissions:' . $numPTOsubmissions;
+ 	 
+ 	 if ($numPTOsubmissions > 0 ) {
+ 	 	 //$content .= t('<p>Use the above table to approve each PTO submission or');
+ 	 	 $content .= t('<p>Use the button below to approve all submitted PTO.</p>');
+ 	 	 $content .= drupal_get_form('time_off_approval_form', $sql2);
+ 	 }
+ 	 else {
+ 	 	 $content .= '<h4>You have no PTO to approve.</p><p>&nbsp;</h4>';
+ 	 }
+/*** Table of Employees who have not submitted PTO this pay period ***/
+ 	 $date_given = date_create(date('Y-m-d'));
+ 	 $payperiod = _time_off_calc_payperiod($date_given);
+ 	  // Get list of users who have not submitted PTO
+ 	 $sql3 = 'SELECT users.uid, users.name, users.access, users.mail ';
+ 	 $sql3 .= 'FROM {users} ';
+ 	 $sql3 .= 'LEFT JOIN {profile_values} ON users.uid = profile_values.uid ';
+     $sql3 .= "AND profile_values.fid = '5' ";
+ 	 $sql3 .= "WHERE users.uid <> 0 AND profile_values.value = '" . $manager . "' ";
+ 	 $sql3 .= 'AND users.uid NOT IN (SELECT DISTINCT users.uid AS uid ';
+ 	 $sql3 .= 'FROM {data_table_time_off_table} LEFT JOIN {users} ';
+ 	 $sql3 .= 'ON users.uid = data_table_time_off_table.uid ';
+ 	 $sql3 .= "WHERE pto_date >= '" . date_format($payperiod['start'], 'Y-m-d') . "' AND ";
+ 	 $sql3 .= "data_table_time_off_table.status != 'Saved')";
+ 	 $result3 = db_query($sql3);
+ 	 if (db_result($result3)) {$numPTOnot_subd = 'Y';}
+ 	 else {$numPTOnot_subd = 'N';}
+ 	 
+ 	 $content .= '<p>&nbsp;</p>';
+ 	 //$content .= 'Number of employees not subd yet: ' . $numPTOnot_subd . '<br />';
+ 	 
+ 	 // Only show table of subordinates that haven't submitted if there is at least one
+ 	 if ($numPTOnot_subd == 'Y') {	 
+ 	 	 $content .= '<h4>Subordinates that have NOT submitted PTO this pay period</h4>'; 
+ 	 	 $content .= '<p align=center><table><tr><td><h4>Employee</h4></td>';
+ 	 	 $content .= '<td><h4>Last access</h4></td></tr>';
+ 	 	 $result3 = db_query($sql3);
+ 	 	 while ($PTO_not_subd = db_fetch_object ($result3) ) {
+ 	 	 	 $content .= '<tr><td>' . $PTO_not_subd->name . '</td>';
+ 	 	 	 $content .= '<td>' . format_date($PTO_not_subd->access, 'Y-m-d') . '</td></tr>';
+ 	 	 }
+ 	 	 $content .= '</table></p><p>&nbsp;</p>';
+ 	 }
+ 	 else {
+ 	 	 $content .='<h4>All your subordinates have submitted PTO for this pay period.</h4>';
+ 	 }
+ 	 
+	 return $content;	
+ }
+ 
+ 
+/****************************************************
+*  Administrator's PTO view and functions.
+****************************************************/
+
+/**
+ * Menu callback for administrator's PTO records view
+ * Called when user goes to /view_pto_admin
+ */
+ function admin_pto_display() {
+ 	 // Get end day of last pay period
+ 	 $date_given = date_create(date('Y-m-d'));
+ 	 $payperiod = _time_off_calc_payperiod($date_given);
+
+ 	 // Get list of users where status = 'submitted' this pay period
+ 	 $sql = 'SELECT users.uid, users.name, users.access, users.mail, ';
+ 	 $sql .= 'data_table_time_off_table.pto_taken AS pto_taken, ';
+ 	 $sql .= "IF (pto_taken = 'Yes', SUM(data_table_time_off_table.pto_hours), 'None') ";
+ 	 $sql .= 'AS pto_hours ';
+ 	 $sql .= 'FROM {data_table_time_off_table} LEFT JOIN {users} ';
+ 	 $sql .= 'ON users.uid = data_table_time_off_table.uid ';
+ 	 $sql .= 'WHERE users.status > 0 AND users.uid > 1 AND ';
+ 	 $sql .= "pto_date >= '" . date_format($payperiod['start'], 'Y-m-d') . "' AND ";
+ 	 $sql3 .= $sql;
+ 	 $sql .= "data_table_time_off_table.status = 'Submitted' ";
+ 	 $sql .= 'GROUP BY uid ORDER BY pto_hours';
+ 	 $result = db_query($sql);
+ 	 
+ 	 // Get list of users where status = 'approved' this pay period
+ 	 $sql3 .= "data_table_time_off_table.status = 'Approved' ";
+ 	 $sql3 .= 'GROUP BY uid ORDER BY pto_hours';
+ 	 $result3 = db_query($sql3);
+ 	 
+ 	 // Get list of users who have not submitted PTO
+ 	 $sql2 = 'SELECT users.uid, users.name, users.access, users.mail ';
+ 	 $sql2 .= 'FROM {users} WHERE uid > 1 AND status > 0 AND uid NOT IN (SELECT DISTINCT users.uid AS uid ';
+ 	 $sql2 .= 'FROM {data_table_time_off_table} LEFT JOIN {users} ';
+ 	 $sql2 .= 'ON users.uid = data_table_time_off_table.uid ';
+ 	 $sql2 .= "WHERE pto_date >= '" . date_format($payperiod['start'], 'Y-m-d') . "' AND ";
+ 	 $sql2 .= "data_table_time_off_table.status != 'Saved')";
+ 	 $result2 = db_query($sql2);
+  	 
+ 	 $content = '';
+ 	 //$content .= 'This will be the PTO administrator view.<br />';
+ 	 // Table of all PTO employees and their current pay period 
+ 	 // PTO status, type, hours
+ 	 //$content .= '<p>' . $sql3 . '</p>';
+ 	 
+ 	 $content .= '<p>First day of current payperiod = ' . date_format($payperiod['start'], 'Y-m-d') . '<br />';
+ 	 $content .= 'Last day of current payperiod = ' . date_format($payperiod['end'], 'Y-m-d') . '</p>';
+ 	 
+/*** Table of Approved PTO ***/
+
+	 $content .= '<p>&nbsp;</p><h4>Employees that have APPROVED PTO this pay period</h4>';
+	 $content .= '<p align=center><table><tr><td><h4>Employee</h4></td>';
+ 	 $content .= '<td><h4>Last access</h4></td><td><h4>Hours of PTO</h4></td></tr>';
+ 	 while ($PTOapproved = db_fetch_object ($result3) ) {
+ 	 	 $content .= '<tr><td>' . $PTOapproved->name . '</td>';
+ 	 	 $content .= '<td>' . format_date($PTOapproved->access, 'Y-m-d') . '</td>';
+ 	 	 $content .= '<td>' . $PTOapproved->pto_hours . '</td></tr>';
+ 	 }
+ 	 $content .= '</table></p>';
+
+ 	 
+/*** Table of Submitted but not Approved PTO ***/
+ 	 
+ 	 $content .= '<p>&nbsp;</p><h4>Employees that have SUBMITTED PTO but have not been ';
+ 	 $content .= 'APPROVED this pay period</h4>';
+ 	 $content .= '<p align=center><table><tr><td><h4>Employee</h4></td>';
+ 	 $content .= '<td><h4>Last access</h4></td><td><h4>Hours of PTO</h4></td></tr>';
+ 	 while ($PTOsubd = db_fetch_object ($result) ) {
+ 	 	 $content .= '<tr><td>' . $PTOsubd->name . '</td>';
+ 	 	 $content .= '<td>' . format_date($PTOsubd->access, 'Y-m-d') . '</td>';
+ 	 	 $content .= '<td>' . $PTOsubd->pto_hours . '</td></tr>';
+ 	 }
+ 	 $content .= '</table></p>';
+ 	  
+/*** Table of Employees who have not submitted PTO this pay period ***/
+ 	 
+ 	 $content .= '<p>&nbsp;</p><h4>Employees that have NOT submitted PTO ';
+ 	 $content .= 'this pay period</h4>';
+ 	 $content .= '<p align=center><table><tr><td><h4>Employee</h4></td>';
+ 	 $content .= '<td><h4>Last access</h4></td></tr>';
+ 	 while ($PTO_not_subd = db_fetch_object ($result2) ) {
+ 	 	 $content .= '<tr><td>'; 
+ 	 	 $content .= $PTO_not_subd->name . '</a></td>';
+ 	 	 $content .= '<td>' . format_date($PTO_not_subd->access, 'Y-m-d') . '</td></tr>';
+ 	 }
+ 	 $content .= '</table></p><p>&nbsp;</p>';
+ 	 
+ 	 // Table with all PTO records - with links to select just approved,
+ 	 // just submitted, or just saved.
+ 	 //$content .= '<p>View only Approved PTO records</p>';
+ 	 //$content .= '<p>View only Submitted PTO records</p>';
+ 	 
+ 	 return $content;	
+ }
+/**
+ * Menu callback.
+ * Called when administrator goes to /admin_time_off
+ */
+  
+ function admin_display_form() {
+ 	 
+ 	 $current_payperiod = _time_off_get_payperiod();
+ 	 //$other_payperiod = _time_off_calc_payperiod();
+ 	 //$entry2edit = '';
+ 	 //if (arg(1)) {$entry2edit = arg(1);}
+ 	 
+ 	 $output = t("<h4>All PTO entered through this form is automatically set to status 'Approved'.</h4>");
+ 	 $output .= t("<p>You can use this form to enter any employee's PTO for the current pay period.</p>");
+ 	 $output .= 'Current Pay Period Ends: ';
+ 	 $output .= date_format($current_payperiod, 'l F j, Y') . '<br />';
+ 	 //$output .= date_format($other_payperiod, 'l F j, Y') . '<br />';
+ 	 //$result = db_query('SELECT uid, name FROM users WHERE uid > 1');
+
+ 	 // Return the HTML generated from the $form data structure.
+ 	 
+	 $output .= drupal_get_form('admin_time_off_form');
+
+ 	 return $output;
+ }
+
+ /**
+ * Implementation of hook_form().
+ * This function displays the form to allow employees to enter PTO.
+ * @return
+ *		Form array
+ */
+ function admin_time_off_form() {
+ 	 
+ 	 //global $user;
+ 	 $entry2edit = '';
+ 	 if (arg(1)) {
+ 	 	 $entry2edit = db_fetch_array(db_query(
+ 	 	 	 'SELECT * FROM {data_table_time_off_table} '
+ 	 	 	 .'WHERE entry_ID = %d',
+ 	 	 	 arg(1)
+ 		 ));
+ 	 }
+ 	 
+ 	 $form['#id'] = 'enter_pto';
+ 		 
+ 	 // User info via uid
+ 	 $result = db_query('SELECT uid, name FROM users WHERE uid > 1 AND status > 0');
+ 	 while($PTOuser = db_fetch_object($result)) {
+ 	 	 	 $PTOusers[$PTOuser->uid] = $PTOuser->name;
+ 	 }
+
+ 	 $form['uid'] = array(
+ 	 	 '#type' => 'select',
+ 	 	 '#title' => t('Employee'),
+ 	 	 '#description' => t('Select an employee from the drop-down list'),
+ 	 	 '#options' => $PTOusers,
+
+ 	 );
+ 	 
+ 	 // Add hidden values
+ 	 $form['save_date'] = array(
+ 	 	 '#type' => 'value',
+ 	 	 '#value' => date('Y-m-d - H:i'),
+ 	 );
+ 	 
+ 	 // Indicate if this is a new or edited entry
+ 	 $form['edit'] = array(
+ 	 	 '#type' => 'value',
+ 	 	 '#value' => (arg(1)),
+ 	 );
+ 	 
+ 	 // Submission status of entry
+ 	 $form['status'] = array(
+ 	 	 '#type' => 'value',
+ 	 	 '#value' => t('Approved'),
+ 	 );
+
+ 	 // PTO taken - radio button input
+ 	 $form['pto_taken'] = array(
+ 	 	 '#type' => 'radios',
+ 	 	 '#title' => t('PTO taken'),
+ 	 	 '#required' => TRUE,
+ 	 	 '#options' => array('Yes' => t('Yes'), 'No' => t('No')),
+ 	 	 '#description' => t('Did the employee take any PTO this pay period?'),
+ 	 	 '#default_value' => $entry2edit['pto_taken'],
+ 	 );
+ 	 
+ 	 // Fieldset for PTO entry if 'pto_taken' is true.
+ 	 $form['new_pto'] = array(	 
+ 	 	 '#title' => t('Enter PTO information'),
+ 	 	 '#type' => 'fieldset',
+ 	 	 '#attributes' => array('id' => 'new_pto'),
+ 	 	 '#collapsible' => TRUE,
+ 	 	 '#collapsed' => TRUE,
+ 	 );
+ 	 
+ 	 // Form elements for recording PTO taken
+ 	 $form['new_pto']['pto_date'] = array(
+ 	 	 '#type' => 'date',
+ 	 	 '#title' => t('Date'),
+ 	 	 '#default_value' => $entry2edit['pto_date'],
+ 	 	 '#description' => t('Enter the date the employee took PTO'),
+ 	 );
+ 	 if (module_exists('date_popup')) {
+ 	 	 $form['new_pto']['pto_date']['#type'] = 'date_popup';
+ 	 	 // Get the system date format.
+ 	 	 $date_format = variable_get('date_format_short', 'm/d/Y');
+ 	 	 // Remove anything not date-related. This prevents date_popup from showing a time picker.
+ 	 	 $date_format = date_limit_format($date_format, array('year', 'month', 'day'));
+ 	 	 $form['new_pto']['pto_date']['#date_format'] = $date_format;
+ 	 	 $form['new_pto']['pto_date']['#date_year_range'] = '1';
+ 	 	 $form['new_pto']['pto_date']['#date_timezone'] = 'America/New York';
+ 	 	 
+ 	 }
+ 	 
+ 	 $form['new_pto']['pto_hours'] = array(
+ 	 	 '#type' => 'radios',
+ 	 	 '#title' => t('Hours'),
+ 	 	 '#options' => array('4' => t('4 hours'), '8' => t('8 hours')),
+ 	 	 '#description' => t('Select the number of hours of PTO taken.'),
+ 	 	 '#default_value' => $entry2edit['pto_hours'],
+ 	 	 '#prefix' => '<div class="pto_form_item">',
+ 	 	 '#suffix' => '</div>',
+ 	 );
+ 	 
+ 	 // Submit
+ 	 $form['submit'] = array(
+ 	 	 '#type' => 'submit',
+ 	 	 '#value' => t('Submit PTO Entry'),
+ 	 );
+ 	 
+ 	 $form['submit2'] = array(
+ 	 	 '#type' => 'submit',
+ 	 	 '#value' => t('Submit and Add another PTO Entry'),
+ 	 );
+ 	 
+ 	 if (arg(1)) {
+ 	 	 $form['submit3'] = array(
+ 	 	 	 '#type' => 'submit',
+ 	 	 	 '#value' => t('Delete this PTO Entry'),
+ 	 	 	 //'#attributes' => array('onClick' => 'javascript:alert("")'),
+ 	 	 );
+ 	 }
+ 	 
+ 	 return $form;
+ }
+ 
+/**
+ * Validate the form.
+ */
+ 
+ function admin_time_off_form_validate($form, &$form_state) {
+ 	 	 
+ 	 if ($form_state['values']['pto_taken'] == 'Yes' &&
+ 	 	 $form_state['values']['pto_date'] == '' ) {
+ 	 		form_set_error('pto_date', t('Select date of PTO.'));
+ 	 }
+ 	 if ($form_state['values']['pto_taken'] == 'Yes' && 
+ 	 	 $form_state['values']['pto_hours'] < 4 ) {
+ 	 	 	form_set_error('pto_hours',t('Select hours of PTO taken.'));
+ 	 }	 
+ }
+ 
+/**
+ * Form submission handler.
+ */
+ function admin_time_off_form_submit($form, &$form_state) {
+ 	 // If no pto taken, set pto date to last day of pay period.
+ 	 if ($form_state['clicked_button']['#value']== 'Delete this PTO Entry') {
+ 	 	 
+ 	 	 db_query(
+ 	 	 	 'DELETE FROM {data_table_time_off_table} WHERE entry_ID = %d',
+ 	 	 	 $form_state['values']['edit']
+ 	 	 );
+ 	 	 
+ 	 	 drupal_set_message('PTO entry deleted.');
+ 	 	 $form_state['redirect'] = 'view_pto_admin';
+ 	 	 return;
+ 	 }
+ 	 
+ 	 $current_payperiod = date_format(_time_off_get_payperiod(),'Y-m-d');
+ 	 
+ 	 if ($form_state['values']['pto_taken'] == 'No') {
+ 	 	$form_state['values']['pto_date'] = $current_payperiod;
+ 	 }
+ 	 // Update entry, if previously entered.
+ 	 if ($form_state['values']['edit'] != '') {
+ 	 	db_query(
+ 	 		'UPDATE {data_table_time_off_table} SET '
+ 	 			."uid = %d, save_date = '%s', pto_taken = '%s', pto_date = '%s', "
+ 	 			."pto_hours = %d, status = '%s' "
+ 	 			.'WHERE entry_ID = %d',
+ 	 			$form_state['values']['uid'],
+ 	 	 	 	$form_state['values']['save_date'],	 
+ 	 	 	 	$form_state['values']['pto_taken'],
+ 	 	 	 	$form_state['values']['pto_date'],
+ 	 	 	 	$form_state['values']['pto_hours'],
+ 	 	 	 	$form_state['values']['status'],
+ 	 	 	 	$form_state['values']['edit']
+ 	 	);
+ 	 }
+ 	 else {
+ 	 	 // Insert form entry
+ 	 	 db_query(
+ 	 	 	 'INSERT INTO {data_table_time_off_table} ( '
+ 	 	 	 	.'uid, save_date, pto_taken, pto_date, pto_hours, status ) '
+ 	 	 	 	."VALUES (%d, '%s', '%s', '%s', %d, '%s' )",
+ 	 	 	 	$form_state['values']['uid'],
+ 	 	 	 	$form_state['values']['save_date'],	 
+ 	 	 	 	$form_state['values']['pto_taken'],
+ 	 	 	 	$form_state['values']['pto_date'],
+ 	 	 	 	$form_state['values']['pto_hours'],
+ 	 	 	 	$form_state['values']['status']
+ 	 	 );
+ 	 }
+ 	 
+ 	 drupal_set_message('New PTO entry submitted and approved.');
+ 	 
+ 	 if ($form_state['clicked_button']['#value']== 'Submit PTO Entry') {
+ 	 	 $form_state['redirect'] = 'view_pto_admin';
+ 	 }
+ 	 
+ 	 if ($form_state['clicked_button']['#value']== 'Save and Add another PTO Entry') {
+ 	 	 $form_state['redirect'] = 'admin_time_off';
+ 	 }
+ }
+ 
+/**
+ * Menu callback for PTO administrator to approve PTO on behalf of a manager.
+ * Called when user goes to /admin_pto_approve
+*/
+ function admin_pto_approve() {
+ 	 $date_given = date_create(date('Y-m-d'));
+ 	 $date2calc = date_format($date_given, 'd');
+	 $year2do = date_format($date_given, 'Y');
+	 $month2do = date_format($date_given, 'm');
+ 	 
+ 	 if ($date2calc < 16 ) {
+ 	 	 $payperiod_end_str = $year2do . '-' . $month2do . '-15';
+ 	 	 $payperiod_start_str = $year2do . '-' . $month2do . '-1';
+ 	 	 $payperiod_start = date_create(date($payperiod_start_str));
+ 	 }
+ 	 else {
+ 	 	 $payperiod_start_str = $year2do . '-' . $month2do . '-16';
+ 	 	 $payperiod_start = date_create(date($payperiod_start_str));
+ 	 	 $month2do = $month2do + 1;
+ 	 }
+ 	 $payperiod = $payperiod_start_str;
+
+ 	 $content = '<p>Use the table below to approve PTO submissions.</p>';
+ 	 
+ 	 $sql2 = 'SELECT users.uid ';
+ 	 $sql2 .= 'FROM {users} WHERE users.uid > 1 AND uid NOT IN ';
+ 	 $sql2 .= '(SELECT DISTINCT users.uid AS uid ';
+ 	 $sql2 .= 'FROM {data_table_time_off_table} LEFT JOIN {users} ';
+ 	 $sql2 .= 'ON users.uid = data_table_time_off_table.uid WHERE ';
+ 	 $sql2 .= "data_table_time_off_table.pto_date >= '" . $payperiod_start_str . "' AND ";
+ 	 $sql2 .= "data_table_time_off_table.status = 'Approved')";
+ 	 $result2 = db_query($sql2);
+ 	 $content .= $sql2 . '<br/>';
+ 	 $PTOnot_subd = 'All users have approved PTO.';
+
+ 	 while ($PTO_not_subd = db_fetch_object($result2) ) {
+ 	 	 $content .= $PTO_not_subd->uid . '<br/>';
+ 	 	 $PTOnot_subd = 'Some users have unapproved PTO.';
+ 	 }
+ 	 
+ 	 $content .= $PTOnot_subd;
+ 	 
+	 return $content;	
+ }
+ 
+function admin_time_off_approve_form(&$form_state, $pto_entry) {
+
+ 	 $form['#id'] = 'admin_approve_pto'; 
+ 	 $form['#action'] = url('admin_approve_pto');
+ 	 
+ 	 $form['pto_id'] = array(
+ 	 	 '#type' => 'value',
+ 	 	 '#value' => $pto_entry->data_table_time_off_table_entry_ID,
+ 	 );
+ 	 
+ 	 $form['pto_date'] = array(
+ 	 	 '#type' => 'value',
+ 	 	 '#value' => $pto_entry->data_table_time_off_table_pto_date,
+ 	 );
+ 	 
+ 	 $form['submit'] = array(
+ 	 	 '#type' => 'submit',
+ 	 	 '#value' => t('Approve'),
+ 	 	 ); 
+	 
+ 	 return $form;
+ }
+ 
+function admin_time_off_approve_form_submit($form, &$form_state) {
+	$message = '';
+	// if the PTO is approved, set status to 'Approved'
+ 	db_query(
+ 		'UPDATE {data_table_time_off_table} '
+ 			."SET status = 'Approved' "
+ 			.'WHERE entry_ID = %d', 
+ 		$form_state['values']['pto_id']
+ 	);
+
+ 	//$message .= $form_state['values']['pto_id'] . '<br .>';
+ 	$message .= t('PTO entry approved.');
+ 	drupal_set_message($message);
+}
+
+ 
+/******************************************************
+* Module Tokens
+/******************************************************
+/**
+ * Implementation of hook_token_list().
+ */
+function time_off_token_list($type = 'all') {
+  if ($type == 'global' || $type == 'all') {
+  	$tokens['global']['current-payperiod']  = t('Last day of current payperiod.');
+    $tokens['global']['random-sha1']  = t("A randomly generated SHA1 hash.");
+    $tokens['global']['site-date-timestamp'] = t('The current timestamp in seconds past January 1, 1970.');
+    $tokens['global']['random-num-1'] = t('A randomly generated single-digit number.');
+    $tokens['global']['random-num-3'] = t('A randomly generated three-digit number.');
+    $tokens['global']['random-num-10'] = t('A randomly generated ten-digit number.');
+    $tokens['global']['random-alpha-1'] = t('Randomly generated single-digit letter.');
+    $tokens['global']['random-alpha-3'] = t('Randomly generated three-digit letters.');
+    $tokens['global']['random-alpha-10'] = t('Randomly generated ten-digit letters.');
+  }
+  if ($type == 'node' || $type == 'all') {
+    // Node tokens here.
+  }
+  if ($type == 'user' || $type == 'all') {
+  	$tokens['user']['manager'] 			= t("User's manager");
+    $tokens['user']['manager-email']    = t("User's manager's email address");
+    $tokens['user']['subordinate-name'] = t("User's subordinate's name");
+    $tokens['user']['subordinate-email']    = t("User's subordinate's email address");
+  }
+
+  return $tokens;
+}
+
+/**
+ * Implementation of hook_token_values().
+ */
+function time_off_token_values($type, $object = NULL) {
+  $values = array();
+  switch ($type) {
+    case 'global':
+      $values['random-sha1']  = sha1(rand());
+      // Create random numbers.
+      $values['random-num-1'] = mt_rand(0, 9);
+      $values['random-num-3'] = mt_rand(100, 999);
+      $values['random-num-10'] = mt_rand(10000, 99999) . mt_rand(10000, 99999);
+      // Create random letters.
+      $letters = range('a', 'z');
+      $values['random-alpha-1'] = $letters[array_rand($letters, 1)];
+      shuffle($letters);
+      $values['random-alpha-3'] = implode('', array_slice($letters, 0, 3));
+      shuffle($letters);
+      $values['random-alpha-10'] = implode('', array_slice($letters, 0, 10));
+      // Create a UNIX timestamp token.
+      $time = time();
+      $tz = variable_get('date_default_timezone', 0);
+      $values['site-date-timestamp'] = format_date($time, 'custom', 'Y', $tz);
+      $values['current-payperiod'] = format_date(_time_off_get_payperiod(),'Y-m-d');
+      break;
+    case 'node':
+      // Node tokens here.
+      break;
+    case 'user':
+      if (isset($object)) {
+        $account = $object;
+      }
+      else {
+        global $user;
+        $account = user_load(array('uid' => $user->uid));
+      }
+      profile_load_profile($account);
+      // Get a user's manager's email account
+      $result = db_query("SELECT mail FROM {users}
+ 	 	 WHERE name = '%s'",
+ 	 	 $account->profile_manager);
+ 	  $managersEmail = db_result($result);
+      
+      // Get user's manager information
+      $values['manager']       = $account->uid ? $account->profile_manager:'no manager';
+      $values['manager-email'] = $account->uid ? $managersEmail: '';
+      $values['current-payperiod'] = format_date(_time_off_get_payperiod(),'Y-m-d');
+      
+      // Get a user's subordinate's email account
+      $result2 = db_query("SELECT uid FROM {data_table_time_off_table}
+ 	 	 WHERE entry_ID = %d",
+ 	 	 153 );
+      $rejected_pto = db_result($result2);
+      $result3 = db_query(
+      	  'SELECT * FROM {users} WHERE uid = %d', $rejected_pto 
+      );
+      $subordinate = db_fetch_object($result3);
+      
+      $values['subordinate-name']  = $subordinate->name ? $subordinate->name: 'no name';
+      $values['subordinate-email'] = $subordinate->mail ? $subordinate->mail: 'no email';
+         
+
+      break;
+  }
+  return $values;
+}
+
+
+/********************************************
+ *	Private functions:
+ ********************************************/
+ 
+// Get the ending date of the current pay period
+function _time_off_get_payperiod() { 
+ 	 $current_payperiod = date_create(date('Y-m-d'));
+ 	 $today_date = date('d');
+ 	 
+ 	 if ($today_date == 1 ) {
+	 	 date_modify($current_payperiod, '-1 day');
+	 }
+ 	 elseif ($today_date < 17 ) {
+ 	 	$current_payperiod = date_create(date('Y-m-15'));
+ 	 }
+ 	 else {
+ 	 	 $current_payperiod = date_create(date('Y-m-t'));
+ 	 }
+ 	 return $current_payperiod;
+}
+
+
+// Get the start and end days of a pay period given a date
+function _time_off_calc_payperiod($date_given) {
+	 //$date_given = date_create(date('2010-3-27'));
+	 $date2calc = date_format($date_given, 'd');
+	 $year2do = date_format($date_given, 'Y');
+	 $month2do = date_format($date_given, 'm');
+ 	 
+ 	 if ($date2calc < 16 ) {
+ 	 	 $payperiod_end_str = $year2do . '-' . $month2do . '-15';
+ 	 	 $payperiod_start_str = $year2do . '-' . $month2do . '-1';
+ 	 	 $payperiod_end = date_create(date($payperiod_end_str));
+ 	 	 $payperiod_start = date_create(date($payperiod_start_str));
+ 	 }
+ 	 else {
+ 	 	 $payperiod_start_str = $year2do . '-' . $month2do . '-16';
+ 	 	 $payperiod_start = date_create(date($payperiod_start_str));
+ 	 	 $month2do = $month2do + 1;
+ 	 	 $payperiod_end_str = $year2do . '-' . $month2do . '-01';
+ 	 	 $payperiod_end = date_create(date($payperiod_end_str));
+ 	 	 $payperiod_end = date_modify($payperiod_end, '-1 day');
+ 	 }
+ 	 $payperiod = array("start" => $payperiod_start, "end" =>$payperiod_end);
+ 	 return $payperiod;
+	
+}
+
+//function _confirm_delete() {
+//	if (FALSE == FALSE) {
+//		$form['submit3']['#executes_submit_callback'] => FALSE;
+//	}
+//}	
+	
